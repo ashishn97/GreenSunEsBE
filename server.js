@@ -8,7 +8,7 @@ const path = require('path');
 const PizZip = require('pizzip');
 const Docxtemplater = require('docxtemplater');
 const { spawnSync } = require('child_process');
-const fetch = require('node-fetch');
+
 
 mongoose.connect(process.env.MONGO_URI) 
   .then(() => console.log("MongoDB Connected"))
