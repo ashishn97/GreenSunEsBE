@@ -8,6 +8,7 @@ const path = require('path');
 const PizZip = require('pizzip');
 const Docxtemplater = require('docxtemplater');
 const { spawnSync } = require('child_process');
+const fetch = require('node-fetch');
 
 mongoose.connect(process.env.MONGO_URI) 
   .then(() => console.log("MongoDB Connected"))
@@ -147,6 +148,24 @@ app.post('/api/download/docx', async (req, res) => {
       final_amount: data.final_amount,
       date: data.date,
     });
+
+    await fetch("https://script.google.com/macros/s/AKfycbwmTnWDTn7skffqS9RaYMoGLP13oILab6JwHkQBJdq57pBrq43MGocJevStrb_JNcRy/exec", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        ref_no: data.ref_no,
+        client_name: data.client_name,
+        client_number: data.client_number,
+        vendor_name: data.vendor_name,
+        kw: data.kw,
+        base_cost: data.base_cost,
+        final_amount: data.final_amount,
+        type: type
+      })
+     });
+    
     const buf = generateDocxBlob(type, data);
     res.setHeader(
       'Content-Type',
