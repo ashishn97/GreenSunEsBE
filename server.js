@@ -17,7 +17,9 @@ const app = express();
 app.use(cors({ origin: '*' }));
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
-
+app.get('/health', (req, res) => {
+  res.send("OK");
+});
 const COUNTER_FILE = path.join(__dirname, 'counter.json');
 const TEMPLATES_DIR = path.join(__dirname, 'templates');
 const OUTPUT_DIR = path.join(__dirname, 'output');
