@@ -1,24 +1,26 @@
+require('dotenv').config();
 
-mongoose.connect(process.env.MONGO_URI)
-  .then(() => console.log("MongoDB Connected"))
-  .catch(err => console.error("MongoDB Error:", err));
 const express = require('express');
 const cors = require('cors');
-const mongoose = require('mongoose');
+const mongoose = require('mongoose');   
 const fs = require('fs');
 const path = require('path');
 const PizZip = require('pizzip');
 const Docxtemplater = require('docxtemplater');
 const { spawnSync } = require('child_process');
 
+mongoose.connect(process.env.MONGO_URI) 
+  .then(() => console.log("MongoDB Connected"))
+  .catch(err => console.error("MongoDB Error:", err));
+
 const app = express();
-app.use(cors());
+app.use(cors({ origin: '*' }));
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
 
 const COUNTER_FILE = path.join(__dirname, 'counter.json');
 const TEMPLATES_DIR = path.join(__dirname, 'templates');
-const OUTPUT_DIR = path.join(__dirname, 'output'); // Temporary dir for PDF conversion
+const OUTPUT_DIR = path.join(__dirname, 'output');
 
 if (!fs.existsSync(OUTPUT_DIR)) {
   fs.mkdirSync(OUTPUT_DIR);
