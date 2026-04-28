@@ -7,7 +7,30 @@ const fs = require('fs');
 const path = require('path');
 const PizZip = require('pizzip');
 const Docxtemplater = require('docxtemplater');
-const { spawnSync } = require('child_process');
+const { spawnSync, spawn } = require('child_process');
+const https = require('https');
+const crypto = require('crypto');
+
+function nodeFetch(url, options = {}) {
+  return new Promise((resolve, reject) => {
+    const body = options.body || null;
+    const urlObj = new URL(url);
+    const reqOptions = {
+      hostname: urlObj.hostname,
+      path: urlObj.pathname + urlObj.search,
+      method: options.method || 'GET',
+      headers: options.headers || {}
+    };
+    const req = https.request(reqOptions, (res) => {
+      let data = '';
+      res.on('data', chunk => data += chunk);
+      res.on('end', () => resolve({ ok: res.statusCode < 400, status: res.statusCode }));
+    });
+    req.on('error', reject);
+    if (body) req.write(body);
+    req.end();
+  });
+}
 
 
 mongoose.connect(process.env.MONGO_URI) 
@@ -30,7 +53,7 @@ if (!fs.existsSync(OUTPUT_DIR)) {
 }
 
 const QuoteSchema = new mongoose.Schema({
-  ref_no: String,
+  ref_no: { type: String, unique: true },
   date: String,
   client_name: String,
   client_number: String,
@@ -43,7 +66,7 @@ const QuoteSchema = new mongoose.Schema({
 
 const Quote = mongoose.model("Quote", QuoteSchema);
 
-const sofficePath = process.env.LIBREOFFICE_PATH || null
+const sofficePath = process.env.LIBREOFFICE_PATH || '/usr/bin/soffice';
 
 // Ensure counter file exists
 if (!fs.existsSync(COUNTER_FILE)) {
@@ -113,6 +136,34 @@ function generateDocxBlob(type, data) {
   return doc.getZip().generate({ type: 'nodebuffer', compression: 'DEFLATE' });
 }
 
+function getCacheKey(data) {
+  return crypto.createHash('md5').update(JSON.stringify(data)).digest('hex');
+}
+
+function convertToPDF(tempDocxPath) {
+  return new Promise((resolve, reject) => {
+    const proc = spawn(sofficePath, [
+      '--headless',
+      '--nologo',
+      '--nofirststartwizard',
+      '--invisible',
+      '--convert-to', 'pdf',
+      '--outdir', OUTPUT_DIR,
+      tempDocxPath
+    ]);
+    const timeout = setTimeout(() => {
+      proc.kill();
+      reject(new Error('LibreOffice conversion timed out'));
+    }, 30000);
+    proc.on('close', (code) => {
+      clearTimeout(timeout);
+      if (code === 0) resolve(tempDocxPath.replace(/\.docx$/, '.pdf'));
+      else reject(new Error('LibreOffice failed with code ' + code));
+    });
+    proc.on('error', (err) => { clearTimeout(timeout); reject(err); });
+  });
+}
+
 function getSafeFilename(clientName, ext) {
   const safeName = (clientName || '')
     .replace(/[^a-zA-Z0-9 .\-]/g, '')
@@ -137,44 +188,43 @@ app.post('/api/increment-count', (req, res) => {
 app.post('/api/download/docx', async (req, res) => {
   try {
     const { type, data } = req.body;
-    await Quote.create({
-      ref_no: data.ref_no,
-      client_name: data.client_name,
-      client_number: data.client_number,
-      vendor_name: data.vendor_name,
-      type: data.type,
-      kw: data.kw,
-      base_cost: data.base_cost,
-      final_amount: data.final_amount,
-      date: data.date,
-    });
 
-    await fetch("https://script.google.com/macros/s/AKfycbwmTnWDTn7skffqS9RaYMoGLP13oILab6JwHkQBJdq57pBrq43MGocJevStrb_JNcRy/exec", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify({
+    const existing = await Quote.findOne({ ref_no: data.ref_no });
+    if (!existing) {
+      await Quote.create({
         ref_no: data.ref_no,
         client_name: data.client_name,
         client_number: data.client_number,
         vendor_name: data.vendor_name,
+        type: data.type,
         kw: data.kw,
         base_cost: data.base_cost,
         final_amount: data.final_amount,
-        type: type
-      })
-     });
-    
+        date: data.date,
+      });
+      try {
+        await nodeFetch("https://script.google.com/macros/s/AKfycbwmTnWDTn7skffqS9RaYMoGLP13oILab6JwHkQBJdq57pBrq43MGocJevStrb_JNcRy/exec", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            ref_no: data.ref_no,
+            client_name: data.client_name,
+            client_number: data.client_number,
+            vendor_name: data.vendor_name,
+            kw: data.kw,
+            base_cost: data.base_cost,
+            final_amount: data.final_amount,
+            type: type
+          })
+        });
+      } catch(sheetErr) {
+        console.error('Google Sheets log failed (non-fatal):', sheetErr.message);
+      }
+    }
+
     const buf = generateDocxBlob(type, data);
-    res.setHeader(
-      'Content-Type',
-      'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
-    );
-    res.setHeader(
-      'Content-Disposition',
-      `attachment; filename="${getSafeFilename(data.client_name, 'docx')}"`
-    );
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
+    res.setHeader('Content-Disposition', `attachment; filename="${getSafeFilename(data.client_name, 'docx')}"`);
     res.send(buf);
   } catch (error) {
     console.error('Error generating DOCX:', error.message);
@@ -187,62 +237,75 @@ app.post('/api/download/pdf', async (req, res) => {
   let pdfPath = null;
   try {
     const { type, data } = req.body;
-    await Quote.create({
-      ref_no: data.ref_no,
-      client_name: data.client_name,
-      client_number: data.client_number,
-      vendor_name: data.vendor_name,
-      type: data.type,
-      kw: data.kw,
-      base_cost: data.base_cost,
-      final_amount: data.final_amount,
-      date: data.date,
-    });
-    const docxBuf = generateDocxBlob(type, data);
 
-    // Save temp docx
+    const existing2 = await Quote.findOne({ ref_no: data.ref_no });
+    if (!existing2) {
+      await Quote.create({
+        ref_no: data.ref_no,
+        client_name: data.client_name,
+        client_number: data.client_number,
+        vendor_name: data.vendor_name,
+        type: data.type,
+        kw: data.kw,
+        base_cost: data.base_cost,
+        final_amount: data.final_amount,
+        date: data.date,
+      });
+      try {
+        await nodeFetch("https://script.google.com/macros/s/AKfycbwmTnWDTn7skffqS9RaYMoGLP13oILab6JwHkQBJdq57pBrq43MGocJevStrb_JNcRy/exec", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            ref_no: data.ref_no,
+            client_name: data.client_name,
+            client_number: data.client_number,
+            vendor_name: data.vendor_name,
+            kw: data.kw,
+            base_cost: data.base_cost,
+            final_amount: data.final_amount,
+            type: type
+          })
+        });
+      } catch(sheetErr) {
+        console.error('Google Sheets log failed (non-fatal):', sheetErr.message);
+      }
+    }
+
+    const cacheKey = getCacheKey({ type, data });
+    const cachedPdfPath = path.join(OUTPUT_DIR, `cache_${cacheKey}.pdf`);
+
+    if (fs.existsSync(cachedPdfPath)) {
+      console.log('Serving cached PDF');
+      const pdfBuf = fs.readFileSync(cachedPdfPath);
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader('Content-Disposition', `attachment; filename="${getSafeFilename(data.client_name, 'pdf')}"`);
+      return res.send(pdfBuf);
+    }
+
+    const docxBuf = generateDocxBlob(type, data);
     tempDocxPath = path.join(OUTPUT_DIR, `temp_${Date.now()}.docx`);
     fs.writeFileSync(tempDocxPath, docxBuf);
 
-    // Convert to PDF using LibreOffice
-    const result = spawnSync(
-      sofficePath,
-      ['--headless', '--convert-to', 'pdf', '--outdir', OUTPUT_DIR, tempDocxPath],
-      { timeout: 60000 }
-    );
-
-    const stderr = result.stderr ? result.stderr.toString().trim() : '';
-    const stdout = result.stdout ? result.stdout.toString().trim() : '';
-    if (stdout) console.log('LibreOffice stdout:', stdout);
-    if (stderr) console.error('LibreOffice stderr:', stderr);
-
-    if (result.status !== 0) {
-      return res.status(500).json({
-        error: 'LibreOffice conversion failed.',
-        detail: stderr || 'Non-zero exit code: ' + result.status
-      });
+    try {
+      pdfPath = await convertToPDF(tempDocxPath);
+      if (!fs.existsSync(pdfPath)) throw new Error('PDF not produced');
+      const pdfBuf = fs.readFileSync(pdfPath);
+      try { fs.renameSync(pdfPath, cachedPdfPath); pdfPath = cachedPdfPath; } catch(e) {}
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader('Content-Disposition', `attachment; filename="${getSafeFilename(data.client_name, 'pdf')}"`);
+      return res.send(pdfBuf);
+    } catch (convErr) {
+      console.error('PDF failed → sending DOCX fallback:', convErr.message);
+      res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
+      res.setHeader('Content-Disposition', `attachment; filename="${getSafeFilename(data.client_name, 'docx')}"`);
+      return res.send(docxBuf);
     }
 
-    pdfPath = tempDocxPath.replace(/\.docx$/, '.pdf');
-    if (!fs.existsSync(pdfPath)) {
-      console.error('LibreOffice did not produce a PDF file.');
-      return res.status(500).json({ error: 'PDF file not created by LibreOffice.' });
-    }
-
-    const pdfBuf = fs.readFileSync(pdfPath);
-    res.setHeader('Content-Type', 'application/pdf');
-    res.setHeader(
-      'Content-Disposition',
-      `attachment; filename="${getSafeFilename(data.client_name, 'pdf')}"`
-    );
-    res.send(pdfBuf);
   } catch (error) {
     console.error('Error generating PDF:', error.message);
     res.status(500).json({ error: error.message });
   } finally {
-    // Cleanup temp files regardless of success/failure
     try { if (tempDocxPath && fs.existsSync(tempDocxPath)) fs.unlinkSync(tempDocxPath); } catch (e) {}
-    try { if (pdfPath && fs.existsSync(pdfPath)) fs.unlinkSync(pdfPath); } catch (e) {}
   }
 });
 
