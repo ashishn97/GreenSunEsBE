@@ -10,6 +10,8 @@ const Docxtemplater = require('docxtemplater');
 const https = require('https');
 const crypto = require('crypto');
 const ILovePDFApi = require('@ilovepdf/ilovepdf-nodejs');
+console.log('iLovePDF PUBLIC KEY loaded:', process.env.ILOVEPDF_PUBLIC_KEY ? process.env.ILOVEPDF_PUBLIC_KEY.slice(0,8) + '...' : 'MISSING ❌');
+console.log('iLovePDF SECRET KEY loaded:', process.env.ILOVEPDF_SECRET_KEY ? 'present ✅' : 'MISSING ❌');
 const ilovepdf = new ILovePDFApi(
   process.env.ILOVEPDF_PUBLIC_KEY,
   process.env.ILOVEPDF_SECRET_KEY
