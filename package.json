@@ -7,6 +7,7 @@
     "start": "node server.js"
   },
   "dependencies": {
+    "@ilovepdf/ilovepdf-nodejs": "^0.3.1",
     "@xmldom/xmldom": "^0.9.9",
     "cors": "^2.8.5",
     "docxtemplater": "^3.45.0",

@@ -7,10 +7,13 @@ const fs = require('fs');
 const path = require('path');
 const PizZip = require('pizzip');
 const Docxtemplater = require('docxtemplater');
-const { spawnSync, spawn } = require('child_process');
 const https = require('https');
 const crypto = require('crypto');
-
+const ILovePDFApi = require('@ilovepdf/ilovepdf-nodejs');
+const ilovepdf = new ILovePDFApi(
+  process.env.ILOVEPDF_PUBLIC_KEY,
+  process.env.ILOVEPDF_SECRET_KEY
+);
 function nodeFetch(url, options = {}) {
   return new Promise((resolve, reject) => {
     const body = options.body || null;
@@ -65,8 +68,6 @@ const QuoteSchema = new mongoose.Schema({
 }, { timestamps: true });
 
 const Quote = mongoose.model("Quote", QuoteSchema);
-
-const sofficePath = process.env.LIBREOFFICE_PATH || '/usr/bin/soffice';
 
 // Ensure counter file exists
 if (!fs.existsSync(COUNTER_FILE)) {
@@ -140,30 +141,6 @@ function getCacheKey(data) {
   return crypto.createHash('md5').update(JSON.stringify(data)).digest('hex');
 }
 
-function convertToPDF(tempDocxPath) {
-  return new Promise((resolve, reject) => {
-    const proc = spawn(sofficePath, [
-      '--headless',
-      '--nologo',
-      '--nofirststartwizard',
-      '--invisible',
-      '--convert-to', 'pdf',
-      '--outdir', OUTPUT_DIR,
-      tempDocxPath
-    ]);
-    const timeout = setTimeout(() => {
-      proc.kill();
-      reject(new Error('LibreOffice conversion timed out'));
-    }, 30000);
-    proc.on('close', (code) => {
-      clearTimeout(timeout);
-      if (code === 0) resolve(tempDocxPath.replace(/\.docx$/, '.pdf'));
-      else reject(new Error('LibreOffice failed with code ' + code));
-    });
-    proc.on('error', (err) => { clearTimeout(timeout); reject(err); });
-  });
-}
-
 function getSafeFilename(clientName, ext) {
   const safeName = (clientName || '')
     .replace(/[^a-zA-Z0-9 .\-]/g, '')
@@ -234,10 +211,10 @@ app.post('/api/download/docx', async (req, res) => {
 
 app.post('/api/download/pdf', async (req, res) => {
   let tempDocxPath = null;
-  let pdfPath = null;
   try {
     const { type, data } = req.body;
 
+    // Save to DB + Google Sheets (same as DOCX route)
     const existing2 = await Quote.findOne({ ref_no: data.ref_no });
     if (!existing2) {
       await Quote.create({
@@ -271,31 +248,30 @@ app.post('/api/download/pdf', async (req, res) => {
       }
     }
 
-    const cacheKey = getCacheKey({ type, data });
-    const cachedPdfPath = path.join(OUTPUT_DIR, `cache_${cacheKey}.pdf`);
-
-    if (fs.existsSync(cachedPdfPath)) {
-      console.log('Serving cached PDF');
-      const pdfBuf = fs.readFileSync(cachedPdfPath);
-      res.setHeader('Content-Type', 'application/pdf');
-      res.setHeader('Content-Disposition', `attachment; filename="${getSafeFilename(data.client_name, 'pdf')}"`);
-      return res.send(pdfBuf);
-    }
-
+    // Generate DOCX buffer
     const docxBuf = generateDocxBlob(type, data);
     tempDocxPath = path.join(OUTPUT_DIR, `temp_${Date.now()}.docx`);
     fs.writeFileSync(tempDocxPath, docxBuf);
 
     try {
-      pdfPath = await convertToPDF(tempDocxPath);
-      if (!fs.existsSync(pdfPath)) throw new Error('PDF not produced');
-      const pdfBuf = fs.readFileSync(pdfPath);
-      try { fs.renameSync(pdfPath, cachedPdfPath); pdfPath = cachedPdfPath; } catch(e) {}
+      // Convert via iLovePDF
+      const task = ilovepdf.newTask('officepdf');
+      await task.start();
+      await task.addFile(tempDocxPath);
+      await task.process();
+      const pdfArrayBuffer = await task.download();
+
+      // iLovePDF returns a Buffer directly
+      const pdfBuf = Buffer.isBuffer(pdfArrayBuffer)
+        ? pdfArrayBuffer
+        : Buffer.from(pdfArrayBuffer);
+
       res.setHeader('Content-Type', 'application/pdf');
       res.setHeader('Content-Disposition', `attachment; filename="${getSafeFilename(data.client_name, 'pdf')}"`);
       return res.send(pdfBuf);
+
     } catch (convErr) {
-      console.error('PDF failed → sending DOCX fallback:', convErr.message);
+      console.error('iLovePDF conversion failed → sending DOCX fallback:', convErr.message);
       res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
       res.setHeader('Content-Disposition', `attachment; filename="${getSafeFilename(data.client_name, 'docx')}"`);
       return res.send(docxBuf);
@@ -313,3 +289,4 @@ const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`Server running on http://localhost:${PORT}`);
 });
+
