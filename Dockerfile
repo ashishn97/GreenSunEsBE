@@ -1,20 +1,25 @@
-FROM node:22-bookworm-slim
+FROM node:18-bullseye
 
 RUN apt-get update \
-  && apt-get install -y --no-install-recommends libreoffice fonts-dejavu fontconfig \
+  && apt-get install -y --no-install-recommends \
+    libreoffice \
+    libreoffice-writer \
+    fonts-dejavu \
+    fontconfig \
+  && apt-get clean \
   && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
 COPY package*.json ./
-RUN npm ci --omit=dev
+RUN npm install --omit=dev
 
 COPY . .
 
 ENV NODE_ENV=production
+ENV PORT=10000
 ENV LIBREOFFICE_PATH=soffice
-ENV OUTPUT_DIR=/tmp/gse-output
 
 EXPOSE 10000
 
-CMD ["npm", "start"]
+CMD ["node", "server.js"]

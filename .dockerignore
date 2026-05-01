@@ -3,5 +3,6 @@ node_modules
 output
 .git
 .vscode
+.cache
 npm-debug.log
 .DS_Store

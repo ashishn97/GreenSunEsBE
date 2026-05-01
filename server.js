@@ -4,22 +4,26 @@ const express = require('express');
 const cors = require('cors');
 const mongoose = require('mongoose');
 const fs = require('fs');
+const fsp = require('fs/promises');
 const path = require('path');
+const os = require('os');
 const https = require('https');
 const PizZip = require('pizzip');
 const Docxtemplater = require('docxtemplater');
-const Handlebars = require('handlebars');
-const puppeteer = require('puppeteer');
+const { execFile } = require('child_process');
+const { promisify } = require('util');
 
-const PORT = process.env.PORT || 3000;
+const execFileAsync = promisify(execFile);
+
+const PORT = process.env.PORT || 10000;
 const MONGO_URI = process.env.MONGO_URI;
 const GOOGLE_SHEETS_WEBHOOK_URL = process.env.GOOGLE_SHEETS_WEBHOOK_URL;
 const ALLOWED_ORIGIN = process.env.ALLOWED_ORIGIN || 'https://greensunenergyservices.co.in,https://www.greensunenergyservices.co.in';
 const allowedOrigins = ALLOWED_ORIGIN.split(',').map(origin => origin.trim()).filter(Boolean);
 const COUNTER_INITIAL_VALUE = Number.parseInt(process.env.COUNTER_INITIAL_VALUE || '1', 10);
+const SOFFICE_PATH = process.env.LIBREOFFICE_PATH || 'soffice';
 
 const TEMPLATES_DIR = path.join(__dirname, 'templates');
-const PDF_TEMPLATES_DIR = path.join(TEMPLATES_DIR, 'pdf');
 
 if (!MONGO_URI) {
   throw new Error('MONGO_URI is required');
@@ -67,10 +71,7 @@ const CounterSchema = new mongoose.Schema({
 const Quote = mongoose.model('Quote', QuoteSchema);
 const Counter = mongoose.model('Counter', CounterSchema);
 
-let browserPromise = null;
 let pdfQueue = Promise.resolve();
-
-Handlebars.registerHelper('inc', value => Number(value) + 1);
 
 function postJson(url, payload) {
   return new Promise((resolve, reject) => {
@@ -126,17 +127,6 @@ function getDocxTemplatePath(type) {
   return path.join(TEMPLATES_DIR, type === 'bank' ? 'bank-quotation.docx' : 'client-quotation.docx');
 }
 
-function getPdfTemplatePath(type) {
-  if (type !== 'bank' && type !== 'client') throw new Error('Invalid quotation type');
-  return path.join(PDF_TEMPLATES_DIR, type === 'bank' ? 'bank.html' : 'client.html');
-}
-
-function getLogoDataUri() {
-  const logoPath = path.join(PDF_TEMPLATES_DIR, 'logo_new.png');
-  if (!fs.existsSync(logoPath)) return '';
-  return `data:image/png;base64,${fs.readFileSync(logoPath).toString('base64')}`;
-}
-
 function generateDocxBuffer(type, data) {
   const content = fs.readFileSync(getDocxTemplatePath(type), 'binary');
   const zip = new PizZip(content);
@@ -176,6 +166,65 @@ function generateDocxBuffer(type, data) {
   }
 
   return doc.getZip().generate({ type: 'nodebuffer', compression: 'DEFLATE' });
+}
+
+function enqueuePdfJob(task) {
+  const job = pdfQueue.then(task, task);
+  pdfQueue = job.catch(() => {});
+  return job;
+}
+
+async function convertDocxToPdf(docxBuffer) {
+  return enqueuePdfJob(async () => {
+    const tempDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'gse-pdf-'));
+    const inputPath = path.join(tempDir, 'input.docx');
+    const outputPath = path.join(tempDir, 'input.pdf');
+    const profileDir = path.join(tempDir, 'lo-profile');
+
+    try {
+      await fsp.writeFile(inputPath, docxBuffer);
+      await fsp.mkdir(profileDir, { recursive: true });
+
+      console.log(`Starting LibreOffice PDF conversion: ${inputPath}`);
+      const startedAt = Date.now();
+
+      await execFileAsync(SOFFICE_PATH, [
+        '--headless',
+        '--nologo',
+        '--nofirststartwizard',
+        '--nodefault',
+        '--nolockcheck',
+        `-env:UserInstallation=file://${profileDir.replace(/\\/g, '/')}`,
+        '--convert-to',
+        'pdf',
+        '--outdir',
+        tempDir,
+        inputPath
+      ], {
+        timeout: 90000,
+        maxBuffer: 1024 * 1024 * 10
+      });
+
+      if (!fs.existsSync(outputPath)) {
+        throw new Error('LibreOffice did not create PDF output');
+      }
+
+      const pdfBuffer = await fsp.readFile(outputPath);
+      if (!pdfBuffer.length || pdfBuffer.slice(0, 4).toString() !== '%PDF') {
+        throw new Error('LibreOffice produced an invalid PDF');
+      }
+
+      console.log(`LibreOffice PDF conversion completed in ${Date.now() - startedAt}ms`);
+      return pdfBuffer;
+    } catch (err) {
+      console.error('LibreOffice PDF conversion failed:', err.message);
+      throw new Error('PDF conversion failed');
+    } finally {
+      await fsp.rm(tempDir, { recursive: true, force: true }).catch(cleanupErr => {
+        console.warn('PDF temp cleanup failed:', cleanupErr.message);
+      });
+    }
+  });
 }
 
 function getSafeFilename(clientName, ext) {
@@ -250,91 +299,6 @@ async function saveAndLogQuote(type, data) {
   await ensureSheetLogged(quote, type, data);
 }
 
-function buildMaterials(data) {
-  const components = [
-    'PV Modules',
-    'Grid-Tie Inverter',
-    'Structure',
-    'Meter',
-    'DC Wire',
-    'AC Wire',
-    'Earthing Wire',
-    'Earthing Material',
-    'Lighting Arrestor',
-    'Fitting Accessories',
-    'ACDB / DCDB / MCB Box / Busbar / Panel Box'
-  ];
-  const warranties = ['25', '8 - 10', '10', '1', '2', '2', 'N/A', '5', 'N/A', 'N/A', 'As Per Standard'];
-  const qtyDefaults = ['10 No.', '1 Nos.', 'As Required', '1 set', 'As Required', 'As Required', 'As Required', '1 Set', '1 No.', 'As Required', '1 Set'];
-
-  return components.map((component, index) => {
-    const row = index + 1;
-    return {
-      no: row,
-      component,
-      spec: data[`spec_${row}`] || (row === 2 ? `Capacity of ${data.kw || ''} kW` : ''),
-      company: data[`company_${row}`] || '',
-      warranty: warranties[index],
-      qty: data[`qty_${row}`] || qtyDefaults[index]
-    };
-  });
-}
-
-function buildPdfViewModel(type, data) {
-  return {
-    ...data,
-    quotationTypeLabel: type === 'bank' ? 'Bank Quotation' : 'Client Quotation',
-    isClient: type === 'client',
-    logoDataUri: getLogoDataUri(),
-    materials: buildMaterials(data),
-    discount: data.Discount_amount || '0',
-    central_subsidy: data.central_subsidy || '78,000',
-    state_subsidy: data.state_subsidy || '17,000'
-  };
-}
-
-async function getBrowser() {
-  if (!browserPromise) {
-    browserPromise = puppeteer.launch({
-      headless: 'new',
-      args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--font-render-hinting=none']
-    });
-  }
-  return browserPromise;
-}
-
-function enqueuePdfJob(task) {
-  const job = pdfQueue.then(task, task);
-  pdfQueue = job.catch(() => {});
-  return job;
-}
-
-async function generatePdfBuffer(type, data) {
-  return enqueuePdfJob(async () => {
-    const template = Handlebars.compile(fs.readFileSync(getPdfTemplatePath(type), 'utf-8'));
-    const html = template({
-      ...buildPdfViewModel(type, data),
-      css: fs.readFileSync(path.join(PDF_TEMPLATES_DIR, 'quotation.css'), 'utf-8')
-    });
-
-    const browser = await getBrowser();
-    const page = await browser.newPage();
-    try {
-      await page.setContent(html, { waitUntil: 'networkidle0' });
-      await page.emulateMediaType('screen');
-      const pdf = await page.pdf({
-        format: 'A4',
-        printBackground: true,
-        preferCSSPageSize: true,
-        margin: { top: '0mm', right: '0mm', bottom: '0mm', left: '0mm' }
-      });
-      return Buffer.from(pdf);
-    } finally {
-      await page.close();
-    }
-  });
-}
-
 app.get('/health', (req, res) => {
   res.status(200).json({ ok: true });
 });
@@ -379,7 +343,8 @@ app.post('/api/download/pdf', async (req, res) => {
     const { type, data } = req.body;
     validateDownloadPayload(type, data);
     await saveAndLogQuote(type, data);
-    const pdfBuffer = await generatePdfBuffer(type, data);
+    const docxBuffer = generateDocxBuffer(type, data);
+    const pdfBuffer = await convertDocxToPdf(docxBuffer);
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', `attachment; filename="${getSafeFilename(data.client_name, 'pdf')}"`);
     res.send(pdfBuffer);
@@ -391,10 +356,6 @@ app.post('/api/download/pdf', async (req, res) => {
 
 async function shutdown() {
   try {
-    if (browserPromise) {
-      const browser = await browserPromise;
-      await browser.close();
-    }
     await mongoose.connection.close();
   } finally {
     process.exit(0);
