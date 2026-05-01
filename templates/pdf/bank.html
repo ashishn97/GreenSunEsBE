@@ -1,0 +1,178 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>{{quotationTypeLabel}}</title>
+  <style>{{{css}}}</style>
+</head>
+<body>
+  <main class="document">
+    <section class="page-section">
+      <header class="header">
+        {{#if logoDataUri}}<img class="logo" src="{{logoDataUri}}" alt="GreenSun Energy Services">{{/if}}
+        <div class="brand">
+          <div class="tagline">Complete Solar Solutions</div>
+          <h1>GreenSun Energy Services</h1>
+          <div class="company-lines">
+            <div>Shop 36, Chandaravatika, Jaipur, Rajasthan, 302021</div>
+            <div>GST No.: 08CEUPR1524N1Z0</div>
+            <div>+91 70141 83303</div>
+            <div>greensunenergy1622@gmail.com</div>
+          </div>
+        </div>
+      </header>
+
+      <div class="title-band">
+        <h2>{{quotationTypeLabel}}</h2>
+        <p>Proposal for {{kw}} kW roof-top solar PV plant</p>
+      </div>
+
+      <div class="meta-grid">
+        <div class="box">
+          <div class="box-title">Document</div>
+          <div class="field-line"><span class="label">Date:</span> {{date}}</div>
+          <div class="field-line"><span class="label">Reference:</span> {{ref_no}}</div>
+        </div>
+        <div class="box">
+          <div class="box-title">Vendor Details</div>
+          <div class="field-line">{{vendor_name}}</div>
+          <div class="field-line">{{vendor_phone}}</div>
+        </div>
+        <div class="box">
+          <div class="box-title">Client</div>
+          <div class="field-line">{{client_name}}</div>
+          <div class="field-line">+91 {{client_number}}</div>
+        </div>
+        <div class="box">
+          <div class="box-title">Installation Address</div>
+          <div class="field-line">{{client_address}}</div>
+        </div>
+      </div>
+    </section>
+
+    <section class="page-section">
+      <header class="header">
+        {{#if logoDataUri}}<img class="logo" src="{{logoDataUri}}" alt="GreenSun Energy Services">{{/if}}
+        <div class="brand">
+          <div class="tagline">Complete Solar Solutions</div>
+          <h1>GreenSun Energy Services</h1>
+          <div class="company-lines">
+            <div>Shop 36, Chandaravatika, Jaipur, Rajasthan, 302021</div>
+            <div>GST No.: 08CEUPR1524N1Z0</div>
+          </div>
+        </div>
+      </header>
+
+      <h3 class="section-title">Description of Materials</h3>
+      <table>
+        <thead>
+          <tr>
+            <th class="col-no">S. No.</th>
+            <th class="col-component">Component</th>
+            <th class="col-spec">Specifications</th>
+            <th class="col-company">Company</th>
+            <th class="col-warranty">Warranty</th>
+            <th class="col-qty">Qty.</th>
+          </tr>
+        </thead>
+        <tbody>
+          {{#each materials}}
+          <tr>
+            <td class="col-no">{{no}}</td>
+            <td class="col-component">{{component}}</td>
+            <td class="col-spec">{{spec}}</td>
+            <td class="col-company">{{company}}</td>
+            <td class="col-warranty">{{warranty}}</td>
+            <td class="col-qty">{{qty}}</td>
+          </tr>
+          {{/each}}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="page-section">
+      <header class="header">
+        {{#if logoDataUri}}<img class="logo" src="{{logoDataUri}}" alt="GreenSun Energy Services">{{/if}}
+        <div class="brand">
+          <div class="tagline">Complete Solar Solutions</div>
+          <h1>GreenSun Energy Services</h1>
+          <div class="company-lines">
+            <div>Shop 36, Chandaravatika, Jaipur, Rajasthan, 302021</div>
+            <div>GST No.: 08CEUPR1524N1Z0</div>
+          </div>
+        </div>
+      </header>
+
+      <h3 class="section-title">Proposal</h3>
+      <table class="pricing-table">
+        <tbody>
+          <tr><td>Cost of the {{kw}} kW Solar Plant</td><td>Rs. {{base_cost}}/-</td></tr>
+          <tr><td>GST @ 8.9%</td><td>Rs. {{gst}}/-</td></tr>
+          {{#if isClient}}
+          <tr><td>Discount</td><td>Rs. {{discount}}/-</td></tr>
+          {{/if}}
+          <tr><td>Total Amount Payable Customer</td><td>Rs. {{final_amount}}/-</td></tr>
+        </tbody>
+      </table>
+
+      <div class="amount-words"><span class="label">Final Price in Words:</span> {{final_amount_words}}</div>
+
+      <h3 class="section-title">Subsidy Amount</h3>
+      <table class="pricing-table">
+        <tbody>
+          <tr><td>Central Subsidy</td><td>Rs. {{central_subsidy}}/-</td></tr>
+          <tr><td>State Subsidy (Optional)</td><td>Rs. {{state_subsidy}}/-</td></tr>
+        </tbody>
+      </table>
+
+      <h3 class="section-title">Bank Details</h3>
+      <ul class="note-list">
+        <li>Bank Name: HDFC Bank</li>
+        <li>Account Name: GreenSun Energy Services</li>
+        <li>Account No.: 50200103567038</li>
+        <li>IFSC Code: HDFC0006364</li>
+        <li>Payment Mode: Cheque/Demand Draft should be drawn in favor of GreenSun Energy Services.</li>
+      </ul>
+
+      <h3 class="section-title">Payment Terms and Conditions</h3>
+      <ul class="note-list">
+        <li>20% on order.</li>
+        <li>60% advance on solar panel agencies.</li>
+        <li>15% advance inverter install agencies.</li>
+        <li>5% after completion of site.</li>
+      </ul>
+    </section>
+
+    <section>
+      <header class="header">
+        {{#if logoDataUri}}<img class="logo" src="{{logoDataUri}}" alt="GreenSun Energy Services">{{/if}}
+        <div class="brand">
+          <div class="tagline">Complete Solar Solutions</div>
+          <h1>GreenSun Energy Services</h1>
+          <div class="company-lines">
+            <div>Shop 36, Chandaravatika, Jaipur, Rajasthan, 302021</div>
+            <div>GST No.: 08CEUPR1524N1Z0</div>
+          </div>
+        </div>
+      </header>
+
+      <h3 class="section-title">Terms and Conditions</h3>
+      <table class="terms-table">
+        <thead>
+          <tr><th>Clause</th><th>Description</th><th>Terms</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>1</td><td>Manufacturer Warranty</td><td>Solar panels, inverters, and all equipment come with the manufacturer's warranty only. The customer must contact the manufacturer's service centre for product warranty claims.</td></tr>
+          <tr><td>2</td><td>5-Year Service Period</td><td>GreenSun provides a free 5-year checkup covering wiring and installation work done by our team. This is not a product warranty.</td></tr>
+          <tr><td>3</td><td>On-Demand Maintenance</td><td>Maintenance visits are conducted only upon customer request. The customer must contact GreenSun to schedule a visit.</td></tr>
+          <tr><td>4</td><td>Exclusions</td><td>Cleaning or washing of panels, dust or bird damage, grid issues, power surges, and third-party work are not covered.</td></tr>
+          <tr><td>5</td><td>Validity</td><td>This quotation is valid for up to 7 days. Products once sold are not eligible for return or exchange.</td></tr>
+          <tr><td>6</td><td>Additional Cost</td><td>Cost of superstructure will be extra at Rs. 2000 per kW if required. Any inverter cost difference will be charged as per actual amount.</td></tr>
+        </tbody>
+      </table>
+
+      <p class="footer-note">Generated by GreenSun Energy Services quotation system.</p>
+    </section>
+  </main>
+</body>
+</html>
