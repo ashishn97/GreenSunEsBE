@@ -7,14 +7,11 @@
     "start": "node server.js"
   },
   "dependencies": {
-    "@ilovepdf/ilovepdf-nodejs": "^0.3.1",
-    "@xmldom/xmldom": "^0.9.9",
     "cors": "^2.8.5",
     "docxtemplater": "^3.45.0",
     "dotenv": "^17.4.2",
     "express": "^4.19.2",
     "mongoose": "^9.5.0",
-    "node-fetch": "^3.3.2",
     "pizzip": "^3.1.6"
   }
 }

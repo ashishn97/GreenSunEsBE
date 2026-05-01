@@ -8,14 +8,10 @@ const path = require('path');
 const PizZip = require('pizzip');
 const Docxtemplater = require('docxtemplater');
 const https = require('https');
-const crypto = require('crypto');
-const ILovePDFApi = require('@ilovepdf/ilovepdf-nodejs');
-console.log('iLovePDF PUBLIC KEY loaded:', process.env.ILOVEPDF_PUBLIC_KEY ? process.env.ILOVEPDF_PUBLIC_KEY.slice(0,8) + '...' : 'MISSING ❌');
-console.log('iLovePDF SECRET KEY loaded:', process.env.ILOVEPDF_SECRET_KEY ? 'present ✅' : 'MISSING ❌');
-const ilovepdf = new ILovePDFApi(
-  process.env.ILOVEPDF_PUBLIC_KEY,
-  process.env.ILOVEPDF_SECRET_KEY
-);
+const { execFile } = require('child_process');
+const { promisify } = require('util');
+const execFileAsync = promisify(execFile);
+
 function nodeFetch(url, options = {}) {
   return new Promise((resolve, reject) => {
     const body = options.body || null;
@@ -38,7 +34,7 @@ function nodeFetch(url, options = {}) {
 }
 
 
-mongoose.connect(process.env.MONGO_URI) 
+mongoose.connect(process.env.MONGO_URI, { serverSelectionTimeoutMS: 5000 }) 
   .then(() => console.log("MongoDB Connected"))
   .catch(err => console.error("MongoDB Error:", err));
 
@@ -139,9 +135,31 @@ function generateDocxBlob(type, data) {
   return doc.getZip().generate({ type: 'nodebuffer', compression: 'DEFLATE' });
 }
 
-function getCacheKey(data) {
-  return crypto.createHash('md5').update(JSON.stringify(data)).digest('hex');
+
+async function convertDocxToPdf(docxPath, outDir) {
+  const sofficePath = process.env.LIBREOFFICE_PATH || 'soffice';
+
+  await execFileAsync(sofficePath, [
+    '--headless',
+    '--convert-to',
+    'pdf',
+    '--outdir',
+    outDir,
+    docxPath
+  ]);
+
+  const pdfPath = path.join(outDir, path.basename(docxPath, '.docx') + '.pdf');
+
+  if (!fs.existsSync(pdfPath)) {
+    throw new Error('LibreOffice did not create PDF file');
+  }
+
+    const pdfBuf = fs.readFileSync(pdfPath);
+  try { fs.unlinkSync(pdfPath); } catch (e) {}
+  return pdfBuf;
+
 }
+
 
 function getSafeFilename(clientName, ext) {
   const safeName = (clientName || '')
@@ -168,9 +186,14 @@ app.post('/api/download/docx', async (req, res) => {
   try {
     const { type, data } = req.body;
 
-    const existing = await Quote.findOne({ ref_no: data.ref_no });
-    if (!existing) {
-      await Quote.create({
+    let existing2 = null;
+    try {
+      existing2 = await Quote.findOne({ ref_no: data.ref_no });
+    } catch (dbErr) {
+      console.error('MongoDB skipped:', dbErr.message);
+    }
+    if (!existing2) {
+      if (mongoose.connection.readyState === 1) await Quote.create({
         ref_no: data.ref_no,
         client_name: data.client_name,
         client_number: data.client_number,
@@ -217,9 +240,14 @@ app.post('/api/download/pdf', async (req, res) => {
     const { type, data } = req.body;
 
     // Save to DB + Google Sheets (same as DOCX route)
-    const existing2 = await Quote.findOne({ ref_no: data.ref_no });
+    let existing2 = null;
+    try {
+      existing2 = await Quote.findOne({ ref_no: data.ref_no });
+    } catch (dbErr) {
+      console.error('MongoDB skipped:', dbErr.message);
+    }
     if (!existing2) {
-      await Quote.create({
+      if (mongoose.connection.readyState === 1) await Quote.create({
         ref_no: data.ref_no,
         client_name: data.client_name,
         client_number: data.client_number,
@@ -256,28 +284,17 @@ app.post('/api/download/pdf', async (req, res) => {
     fs.writeFileSync(tempDocxPath, docxBuf);
 
     try {
-      // Convert via iLovePDF
-      const task = ilovepdf.newTask('officepdf');
-      await task.start();
-      await task.addFile(tempDocxPath);
-      await task.process();
-      const pdfArrayBuffer = await task.download();
-
-      // iLovePDF returns a Buffer directly
-      const pdfBuf = Buffer.isBuffer(pdfArrayBuffer)
-        ? pdfArrayBuffer
-        : Buffer.from(pdfArrayBuffer);
+      const pdfBuf = await convertDocxToPdf(tempDocxPath, OUTPUT_DIR);
 
       res.setHeader('Content-Type', 'application/pdf');
       res.setHeader('Content-Disposition', `attachment; filename="${getSafeFilename(data.client_name, 'pdf')}"`);
       return res.send(pdfBuf);
 
     } catch (convErr) {
-      console.error('iLovePDF conversion failed → sending DOCX fallback:', convErr.message);
-      res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
-      res.setHeader('Content-Disposition', `attachment; filename="${getSafeFilename(data.client_name, 'docx')}"`);
-      return res.send(docxBuf);
+      console.error('LibreOffice conversion failed:', convErr.message);
+      return res.status(500).json({ error: 'PDF conversion failed: ' + convErr.message });
     }
+
 
   } catch (error) {
     console.error('Error generating PDF:', error.message);
