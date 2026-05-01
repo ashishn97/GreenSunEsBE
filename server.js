@@ -14,7 +14,8 @@ const puppeteer = require('puppeteer');
 const PORT = process.env.PORT || 3000;
 const MONGO_URI = process.env.MONGO_URI;
 const GOOGLE_SHEETS_WEBHOOK_URL = process.env.GOOGLE_SHEETS_WEBHOOK_URL;
-const ALLOWED_ORIGIN = process.env.ALLOWED_ORIGIN || '*';
+const ALLOWED_ORIGIN = process.env.ALLOWED_ORIGIN || 'https://greensunenergyservices.co.in';
+const allowedOrigins = ALLOWED_ORIGIN.split(',').map(origin => origin.trim());
 const COUNTER_INITIAL_VALUE = Number.parseInt(process.env.COUNTER_INITIAL_VALUE || '1', 10);
 
 const TEMPLATES_DIR = path.join(__dirname, 'templates');
@@ -25,17 +26,23 @@ if (!MONGO_URI) {
 }
 
 const app = express();
-const allowedOrigins = ALLOWED_ORIGIN.split(',').map(origin => origin.trim()).filter(Boolean);
-
-app.use(cors({
+const corsOptions = {
   origin(origin, callback) {
-    if (ALLOWED_ORIGIN === '*' || !origin || allowedOrigins.includes(origin)) {
+    if (!origin || allowedOrigins.includes(origin)) {
       callback(null, true);
       return;
     }
-    callback(new Error('Not allowed by CORS'));
-  }
-}));
+
+    callback(new Error(`CORS blocked for origin: ${origin}`));
+  },
+  methods: ['GET', 'POST', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization'],
+  credentials: false,
+  optionsSuccessStatus: 204
+};
+
+app.use(cors(corsOptions));
+app.options('*', cors(corsOptions));
 app.use(express.json({ limit: '10mb' }));
 
 const QuoteSchema = new mongoose.Schema({
