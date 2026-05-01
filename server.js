@@ -147,6 +147,13 @@ function generateDocxBuffer(type, data) {
     return `<a:ln${attrs}>${fixedInner}</a:ln>`;
   });
 
+  xml = xml.replace(/<v:stroke[^>]*>/g, '');
+  xml = xml.replace(/<\/v:stroke>/g, '');
+  xml = xml.replace(/stroked="true"/g, 'stroked="false"');
+  xml = xml.replace(/strokeweight="[^"]*"/g, 'strokeweight="0"');
+  xml = xml.replace(/strokecolor="[^"]*"/g, '');
+  xml = xml.replace(/style="[^"]*stroke:[^"]*"/g, 'style=""');
+
   zip.file('word/document.xml', xml);
 
   const doc = new Docxtemplater(zip, {
