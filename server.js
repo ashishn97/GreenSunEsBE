@@ -14,8 +14,8 @@ const puppeteer = require('puppeteer');
 const PORT = process.env.PORT || 3000;
 const MONGO_URI = process.env.MONGO_URI;
 const GOOGLE_SHEETS_WEBHOOK_URL = process.env.GOOGLE_SHEETS_WEBHOOK_URL;
-const ALLOWED_ORIGIN = process.env.ALLOWED_ORIGIN || 'https://greensunenergyservices.co.in';
-const allowedOrigins = ALLOWED_ORIGIN.split(',').map(origin => origin.trim());
+const ALLOWED_ORIGIN = process.env.ALLOWED_ORIGIN || 'https://greensunenergyservices.co.in,https://www.greensunenergyservices.co.in';
+const allowedOrigins = ALLOWED_ORIGIN.split(',').map(origin => origin.trim()).filter(Boolean);
 const COUNTER_INITIAL_VALUE = Number.parseInt(process.env.COUNTER_INITIAL_VALUE || '1', 10);
 
 const TEMPLATES_DIR = path.join(__dirname, 'templates');
@@ -33,7 +33,8 @@ const corsOptions = {
       return;
     }
 
-    callback(new Error(`CORS blocked for origin: ${origin}`));
+    console.warn(`CORS blocked origin: ${origin}`);
+    callback(null, false);
   },
   methods: ['GET', 'POST', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization'],
