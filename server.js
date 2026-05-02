@@ -113,12 +113,14 @@ async function getCurrentCount() {
 }
 
 async function incrementCurrentCount() {
-  const initialCount = Number.isFinite(COUNTER_INITIAL_VALUE) ? COUNTER_INITIAL_VALUE : 1;
+  await getCurrentCount();
+
   const counter = await Counter.findOneAndUpdate(
     { key: 'quotation' },
-    { $inc: { count: 1 }, $setOnInsert: { count: initialCount } },
-    { upsert: true, new: true }
+    { $inc: { count: 1 } },
+    { new: true }
   );
+
   return counter.count;
 }
 
