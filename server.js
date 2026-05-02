@@ -22,6 +22,7 @@ const ALLOWED_ORIGIN = process.env.ALLOWED_ORIGIN || 'https://greensunenergyserv
 const allowedOrigins = ALLOWED_ORIGIN.split(',').map(origin => origin.trim()).filter(Boolean);
 const COUNTER_INITIAL_VALUE = Number.parseInt(process.env.COUNTER_INITIAL_VALUE || '1', 10);
 const SOFFICE_PATH = process.env.LIBREOFFICE_PATH || 'soffice';
+const GOOGLE_SHEETS_TIMEOUT_MS = Number.parseInt(process.env.GOOGLE_SHEETS_TIMEOUT_MS || '5000', 10);
 
 const TEMPLATES_DIR = path.join(__dirname, 'templates');
 
@@ -81,6 +82,7 @@ function postJson(url, payload) {
       hostname: urlObj.hostname,
       path: urlObj.pathname + urlObj.search,
       method: 'POST',
+      timeout: GOOGLE_SHEETS_TIMEOUT_MS,
       headers: {
         'Content-Type': 'application/json',
         'Content-Length': Buffer.byteLength(body)
@@ -96,6 +98,7 @@ function postJson(url, payload) {
         resolve(responseBody);
       });
     });
+    req.on('timeout', () => req.destroy(new Error(`Google Sheets timeout after ${GOOGLE_SHEETS_TIMEOUT_MS}ms`)));
     req.on('error', reject);
     req.write(body);
     req.end();
@@ -107,7 +110,7 @@ async function getCurrentCount() {
   const counter = await Counter.findOneAndUpdate(
     { key: 'quotation' },
     { $setOnInsert: { count: initialCount } },
-    { upsert: true, new: true }
+    { upsert: true, returnDocument: 'after' }
   );
   return counter.count;
 }
@@ -118,7 +121,7 @@ async function incrementCurrentCount() {
   const counter = await Counter.findOneAndUpdate(
     { key: 'quotation' },
     { $inc: { count: 1 } },
-    { new: true }
+    { returnDocument: 'after' }
   );
 
   return counter.count;
@@ -280,16 +283,20 @@ async function saveQuoteOnce(type, data) {
   }
 }
 
+function safeSheetValue(value) {
+  return value === undefined || value === null ? '' : String(value).trim();
+}
+
 function buildSheetPayload(type, data) {
   return {
-    ref_no: data.ref_no,
-    client_name: data.client_name,
-    client_number: data.client_number,
-    vendor_name: data.vendor_name,
-    kw: data.kw,
-    base_cost: data.base_cost,
-    final_amount: data.final_amount,
-    type
+    ref_no: safeSheetValue(data.ref_no),
+    client_name: safeSheetValue(data.client_name),
+    client_number: safeSheetValue(data.client_number),
+    vendor_name: safeSheetValue(data.vendor_name),
+    kw: safeSheetValue(data.kw),
+    base_cost: safeSheetValue(data.base_cost),
+    final_amount: safeSheetValue(data.final_amount),
+    type: safeSheetValue(type)
   };
 }
 
@@ -299,8 +306,18 @@ async function ensureSheetLogged(quote, type, data) {
     return;
   }
   if (!quote || quote.sheet_logged) return;
-  await postJson(GOOGLE_SHEETS_WEBHOOK_URL, buildSheetPayload(type, data));
-  await Quote.updateOne({ _id: quote._id }, { $set: { sheet_logged: true } });
+
+  try {
+    const payload = buildSheetPayload(type, data);
+    if (!payload.ref_no || !payload.client_name) throw new Error('Invalid Google Sheets payload');
+    await postJson(GOOGLE_SHEETS_WEBHOOK_URL, payload);
+    await Quote.updateOne({ _id: quote._id }, { $set: { sheet_logged: true } });
+  } catch (err) {
+    console.error('Google Sheets logging failed:', {
+      ref_no: data && data.ref_no,
+      message: err.message
+    });
+  }
 }
 
 async function saveAndLogQuote(type, data) {
