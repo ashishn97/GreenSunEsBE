@@ -322,7 +322,14 @@ async function ensureSheetLogged(quote, type, data) {
 
 async function saveAndLogQuote(type, data) {
   const { quote } = await saveQuoteOnce(type, data);
-  await ensureSheetLogged(quote, type, data);
+  setImmediate(() => {
+    ensureSheetLogged(quote, type, data).catch(err => {
+      console.error('Google Sheets background log failed:', {
+        ref_no: data && data.ref_no,
+        message: err.message
+      });
+    });
+  });
 }
 
 app.get('/health', (req, res) => {
