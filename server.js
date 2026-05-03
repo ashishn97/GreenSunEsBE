@@ -1,4 +1,5 @@
 require('dotenv').config();
+const crypto = require('crypto');
 
 const express = require('express');
 const cors = require('cors');
@@ -33,7 +34,11 @@ if (!MONGO_URI) {
 const app = express();
 const corsOptions = {
   origin(origin, callback) {
-    if (!origin || allowedOrigins.includes(origin)) {
+    if (!origin) { callback(null, true); return; }
+
+    // Always allow localhost / 127.0.0.1 for local development
+    const isLocal = /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin);
+    if (isLocal || allowedOrigins.includes(origin)) {
       callback(null, true);
       return;
     }
@@ -41,8 +46,8 @@ const corsOptions = {
     console.warn(`CORS blocked origin: ${origin}`);
     callback(null, false);
   },
-  methods: ['GET', 'POST', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization'],
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'x-auth-token'],
   credentials: false,
   optionsSuccessStatus: 204
 };
@@ -61,8 +66,24 @@ const QuoteSchema = new mongoose.Schema({
   kw: String,
   base_cost: String,
   final_amount: String,
-  sheet_logged: { type: Boolean, default: false }
+  sheet_logged: { type: Boolean, default: false },
+  kw_number: { type: Number },
+  final_amount_number: { type: Number },
+  deleted_at: { type: Date, default: null }
 }, { timestamps: true });
+
+const HISTORY_ACCESS_CODE = process.env.HISTORY_ACCESS_CODE || '';
+
+function hashToken(raw) {
+  return crypto.createHash('sha256').update(raw).digest('hex');
+}
+
+const HistorySessionSchema = new mongoose.Schema({
+  token_hash: { type: String, unique: true, required: true },
+  name: { type: String, required: true },
+  created_at: { type: Date, default: Date.now }
+});
+const HistorySession = mongoose.model('HistorySession', HistorySessionSchema);
 
 const CounterSchema = new mongoose.Schema({
   key: { type: String, unique: true, required: true },
@@ -332,6 +353,27 @@ async function saveAndLogQuote(type, data) {
   });
 }
 
+// ── AUTH MIDDLEWARE ────────────────────────────────────────────────────────────
+async function authHistory(req, res, next) {
+  const raw = req.headers['x-auth-token'];
+  if (!raw) return res.status(401).json({ error: 'Authentication required' });
+  const hash = hashToken(raw);
+  const session = await HistorySession.findOne({ token_hash: hash });
+  if (!session) return res.status(401).json({ error: 'Invalid or expired token' });
+  req.histUser = session.name;
+  next();
+}
+
+// ── SYNC SHEETS HELPER ──────────────────────────────────────────────────────────
+function syncSheetsAsync(payload) {
+  if (!GOOGLE_SHEETS_WEBHOOK_URL) return;
+  setImmediate(() => {
+    postJson(GOOGLE_SHEETS_WEBHOOK_URL, payload).catch(err => {
+      console.error('Sheets sync failed:', err.message);
+    });
+  });
+}
+
 app.get('/health', (req, res) => {
   res.status(200).json({ ok: true });
 });
@@ -384,6 +426,101 @@ app.post('/api/download/pdf', async (req, res) => {
   } catch (err) {
     console.error('PDF generation failed:', err.message);
     res.status(500).json({ error: err.message });
+  }
+});
+
+// ── POST /api/auth/login ───────────────────────────────────────────────────────
+app.post('/api/auth/login', async (req, res) => {
+  try {
+    const { name, code } = req.body;
+    if (!name || !name.trim()) return res.status(400).json({ error: 'Name is required' });
+    if (!HISTORY_ACCESS_CODE) return res.status(500).json({ error: 'Server not configured' });
+    if (!code || code.trim() !== HISTORY_ACCESS_CODE) {
+      return res.status(401).json({ error: 'Invalid access code' });
+    }
+    const rawToken = crypto.randomBytes(32).toString('hex');
+    const hash = hashToken(rawToken);
+    await HistorySession.create({ token_hash: hash, name: name.trim() });
+    res.json({ token: rawToken, name: name.trim() });
+  } catch (err) {
+    console.error('Login failed:', err.message);
+    res.status(500).json({ error: 'Login failed' });
+  }
+});
+
+// ── GET /api/quotations ────────────────────────────────────────────────────────
+app.get('/api/quotations', authHistory, async (req, res) => {
+  try {
+    const page  = Math.max(1, parseInt(req.query.page  || '1', 10));
+    const limit = Math.min(50, Math.max(1, parseInt(req.query.limit || '10', 10)));
+    const { q, vendor, kw, type, sortBy, sortOrder } = req.query;
+
+    const filter = { deleted_at: null };
+    if (q)      filter.$or = [{ client_name: new RegExp(q, 'i') }, { ref_no: new RegExp(q, 'i') }, { client_number: new RegExp(q, 'i') }, { vendor_name: new RegExp(q, 'i') }];
+    if (vendor) filter.vendor_name = new RegExp(vendor, 'i');
+    if (kw)     filter.kw = new RegExp(`^${parseFloat(kw)}`, 'i');
+    if (type)   filter.type = type;
+
+    const allowedSortFields = ['createdAt', 'kw_number', 'final_amount_number'];
+    const sortField = allowedSortFields.includes(sortBy) ? sortBy : 'createdAt';
+    const order     = sortOrder === 'asc' ? 1 : -1;
+
+    const [data, total] = await Promise.all([
+      Quote.find(filter).sort({ [sortField]: order }).skip((page - 1) * limit).limit(limit).select('-__v'),
+      Quote.countDocuments(filter)
+    ]);
+
+    res.json({ data, pagination: { page, limit, total, pages: Math.ceil(total / limit) } });
+  } catch (err) {
+    console.error('List quotations failed:', err.message);
+    res.status(500).json({ error: 'Failed to retrieve quotations' });
+  }
+});
+
+// ── PUT /api/quotations/:id ────────────────────────────────────────────────────
+app.put('/api/quotations/:id', authHistory, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const allowed = ['client_name', 'vendor_name', 'kw', 'base_cost', 'final_amount', 'type'];
+    const updates = {};
+    for (const field of allowed) {
+      if (req.body[field] !== undefined) updates[field] = String(req.body[field]).trim();
+    }
+    if (req.body.kw !== undefined) {
+      const n = parseFloat(req.body.kw);
+      if (!isNaN(n)) updates.kw_number = n;
+    }
+    if (req.body.final_amount !== undefined) {
+      const n = parseFloat(String(req.body.final_amount).replace(/,/g, ''));
+      if (!isNaN(n)) updates.final_amount_number = n;
+    }
+    if (Object.keys(updates).length === 0) return res.status(400).json({ error: 'No valid fields to update' });
+
+    const quote = await Quote.findByIdAndUpdate(id, { $set: updates }, { new: true, runValidators: true });
+    if (!quote) return res.status(404).json({ error: 'Quotation not found' });
+
+    syncSheetsAsync({ action: 'update', ref_no: quote.ref_no, ...updates });
+    res.json({ ok: true, data: quote });
+  } catch (err) {
+    console.error('Update quotation failed:', err.message);
+    res.status(500).json({ error: 'Update failed' });
+  }
+});
+
+// ── DELETE /api/quotations/:id ─────────────────────────────────────────────────
+app.delete('/api/quotations/:id', authHistory, async (req, res) => {
+  try {
+    const quote = await Quote.findByIdAndUpdate(
+      req.params.id,
+      { $set: { deleted_at: new Date() } },
+      { new: true }
+    );
+    if (!quote) return res.status(404).json({ error: 'Quotation not found' });
+    syncSheetsAsync({ action: 'delete', ref_no: quote.ref_no });
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('Delete quotation failed:', err.message);
+    res.status(500).json({ error: 'Delete failed' });
   }
 });
 
